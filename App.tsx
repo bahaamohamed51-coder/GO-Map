@@ -262,7 +262,7 @@ const App: React.FC = () => {
     setShowBulkEditor(false);
   };
 
-  const handleEnrichLayer = async (layerId: string) => {
+  const handleEnrichLayer = async (layerId: string, scope: 'detailed' | 'broad') => {
       if (enrichingLayerId) return;
       
       const layer = layers.find(l => l.id === layerId);
@@ -281,18 +281,25 @@ const App: React.FC = () => {
         .filter(({ d }) => d.lat && d.lng && !d['المنطقة']) 
         .map(({ i }) => i);
 
-      const maxProcess = Math.min(indicesToProcess.length, 500);
+      // We process more items if the scope is broad because caching is more effective
+      const limit = scope === 'broad' ? 2000 : 500;
+      const maxProcess = Math.min(indicesToProcess.length, limit);
+      
+      // Delay configuration: If using cache (broad), we can go much faster.
+      // If fetching from API, we must respect rate limits.
+      // The API service handles caching, but here we control the "loop" speed.
       
       for (let k = 0; k < maxProcess; k++) {
           const i = indicesToProcess[k];
-          const areaName = await fetchAddressForPoint(newData[i].lat, newData[i].lng);
+          const areaName = await fetchAddressForPoint(newData[i].lat, newData[i].lng, scope);
           newData[i] = { ...newData[i], 'المنطقة': areaName };
           
-          if (k % 5 === 0 || k === maxProcess - 1) {
+          if (k % 50 === 0 || k === maxProcess - 1) {
               setLayers(prev => prev.map(l => l.id === layerId ? { ...l, data: [...newData] } : l));
           }
-          // Decreased delay slightly as caching handles repeats, but still respectful of OSM
-          await new Promise(r => setTimeout(r, 1000)); 
+          
+          // Small delay to allow UI updates, but rely on API service to be fast via cache
+          await new Promise(r => setTimeout(r, 50)); 
       }
       
       setEnrichingLayerId(null);
