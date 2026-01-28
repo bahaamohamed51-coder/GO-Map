@@ -1,17 +1,18 @@
 import React, { useState } from 'react';
 import { LayerConfig, ShapeType } from '../types';
-import { Eye, EyeOff, Trash2, ChevronDown, Palette, ScanEye, CheckSquare, Square, MapPin, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, Trash2, ChevronDown, Palette, ScanEye, CheckSquare, Square, MapPin, Loader2, Copy } from 'lucide-react';
 
 interface LayerControlProps {
   layer: LayerConfig;
   onToggleVisibility: (id: string) => void;
   onDelete: (id: string) => void;
+  onDuplicate: (id: string) => void; // New Prop
   onUpdateConfig: (id: string, updates: Partial<LayerConfig>) => void;
   onUpdateStyleMap: (id: string, value: string, type: 'color' | 'shape', newValue: string) => void;
   onFocusValue: (field: string, value: string) => void;
   onToggleCategory: (layerId: string, category: string) => void; 
-  onEnrichData?: (layerId: string) => void; // New Prop
-  isEnriching?: boolean; // New Prop
+  onEnrichData?: (layerId: string) => void; 
+  isEnriching?: boolean; 
 }
 
 const SHAPES: ShapeType[] = ['circle', 'square', 'triangle', 'diamond', 'star', 'hexagon'];
@@ -20,6 +21,7 @@ const LayerControl: React.FC<LayerControlProps> = ({
   layer, 
   onToggleVisibility, 
   onDelete, 
+  onDuplicate,
   onUpdateConfig,
   onUpdateStyleMap,
   onFocusValue,
@@ -56,7 +58,14 @@ const LayerControl: React.FC<LayerControlProps> = ({
                 {layer.isPlacesLayer && <span className="text-[10px] text-yellow-500">نتائج بحث</span>}
             </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1 shrink-0">
+             <button 
+                onClick={(e) => { e.stopPropagation(); onDuplicate(layer.id); }}
+                className="p-1.5 text-slate-400 hover:text-green-400 hover:bg-slate-700 rounded-md transition-colors"
+                title="تكرار الطبقة (نسخة)"
+            >
+                <Copy size={15} />
+            </button>
              <button 
                 onClick={(e) => { e.stopPropagation(); onDelete(layer.id); }}
                 className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-slate-700 rounded-md transition-colors"
@@ -117,8 +126,8 @@ const LayerControl: React.FC<LayerControlProps> = ({
                     </label>
                     <input 
                         type="range" 
-                        min="5" 
-                        max="50" 
+                        min="2" 
+                        max="30" 
                         value={layer.pointSize || 12}
                         onChange={(e) => onUpdateConfig(layer.id, { pointSize: parseInt(e.target.value) })}
                         className="w-full h-1.5 bg-slate-600 rounded-lg appearance-none cursor-pointer accent-blue-500"
