@@ -1,17 +1,17 @@
 import React, { useState } from 'react';
 import { LayerConfig, ShapeType } from '../types';
-import { Eye, EyeOff, Trash2, ChevronDown, Palette, ScanEye, CheckSquare, Square, MapPin, Loader2, Copy } from 'lucide-react';
+import { Eye, EyeOff, Trash2, ChevronDown, Palette, ScanEye, CheckSquare, Square, MapPin, Loader2, Copy, Settings2 } from 'lucide-react';
 
 interface LayerControlProps {
   layer: LayerConfig;
   onToggleVisibility: (id: string) => void;
   onDelete: (id: string) => void;
-  onDuplicate: (id: string) => void; // New Prop
+  onDuplicate: (id: string) => void; 
   onUpdateConfig: (id: string, updates: Partial<LayerConfig>) => void;
   onUpdateStyleMap: (id: string, value: string, type: 'color' | 'shape', newValue: string) => void;
   onFocusValue: (field: string, value: string) => void;
   onToggleCategory: (layerId: string, category: string) => void; 
-  onEnrichData?: (layerId: string) => void; 
+  onEnrichData?: (layerId: string, scope: 'detailed' | 'broad') => void; 
   isEnriching?: boolean; 
 }
 
@@ -31,6 +31,7 @@ const LayerControl: React.FC<LayerControlProps> = ({
 }) => {
   const [expanded, setExpanded] = useState(false);
   const [editingValue, setEditingValue] = useState<string | null>(null);
+  const [enrichScope, setEnrichScope] = useState<'detailed' | 'broad'>('broad');
 
   const availableKeys = layer.data.length > 0 
     ? Object.keys(layer.data[0]).filter(k => !['id', 'lat', 'lng'].includes(k)) 
@@ -85,17 +86,39 @@ const LayerControl: React.FC<LayerControlProps> = ({
             
             {/* Geo Enrichment Button */}
             {!layer.isPlacesLayer && onEnrichData && (
-                <div className="mb-4">
+                <div className="mb-4 bg-slate-900/50 p-3 rounded-lg border border-slate-700">
+                    <div className="flex items-center justify-between mb-2">
+                         <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
+                            <MapPin size={12} /> جلب أسماء المناطق
+                         </span>
+                         <div className="flex bg-slate-800 rounded p-0.5">
+                             <button 
+                                onClick={() => setEnrichScope('detailed')}
+                                className={`text-[10px] px-2 py-0.5 rounded transition-colors ${enrichScope === 'detailed' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                             >
+                                 دقيق
+                             </button>
+                             <button 
+                                onClick={() => setEnrichScope('broad')}
+                                className={`text-[10px] px-2 py-0.5 rounded transition-colors ${enrichScope === 'broad' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                             >
+                                 عام
+                             </button>
+                         </div>
+                    </div>
+                    
                     <button 
-                        onClick={() => onEnrichData(layer.id)}
+                        onClick={() => onEnrichData(layer.id, enrichScope)}
                         disabled={isEnriching}
                         className="w-full py-2 px-3 bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-600/50 rounded text-xs font-bold flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
                     >
-                        {isEnriching ? <Loader2 size={14} className="animate-spin" /> : <MapPin size={14} />}
-                        {isEnriching ? 'جاري جلب أسماء المناطق...' : 'إضافة "اسم المنطقة" للبيانات'}
+                        {isEnriching ? <Loader2 size={14} className="animate-spin" /> : <Settings2 size={14} />}
+                        {isEnriching ? 'جاري التحليل والمعالجة...' : 'بدء جلب الأسماء'}
                     </button>
-                    <p className="text-[10px] text-slate-400 mt-1 text-center">
-                        سيقوم بجلب اسم المنطقة لكل نقطة وإضافته للجدول.
+                    <p className="text-[10px] text-slate-500 mt-1 text-center">
+                        {enrichScope === 'broad' 
+                            ? 'سريع جداً: يعتمد على اسم المدينة/المركز وتجميع النقاط المتقاربة.' 
+                            : 'أبطأ: يحاول جلب اسم الحي أو الشارع لكل نقطة بدقة.'}
                     </p>
                 </div>
             )}
