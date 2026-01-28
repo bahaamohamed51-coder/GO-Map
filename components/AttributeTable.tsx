@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { CustomerData } from '../types';
-import { X, MapPin, Save, Plus, Filter, Users } from 'lucide-react';
+import { X, MapPin, Plus, Filter, Users, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from 'lucide-react';
 
 interface AttributeTableProps {
   data: CustomerData[];
@@ -9,9 +9,11 @@ interface AttributeTableProps {
   onUpdateData: (id: string, field: string, value: string) => void;
   onAddColumn: (name: string) => void;
   onAddRow: () => void;
-  onBulkEdit: () => void; // New Prop for bulk edit from table
+  onBulkEdit: () => void;
   isFilteredBySelection: boolean;
 }
+
+const ITEMS_PER_PAGE = 50;
 
 const AttributeTable: React.FC<AttributeTableProps> = ({ 
     data, onClose, onRowClick, onUpdateData, onAddColumn, onAddRow, onBulkEdit, isFilteredBySelection 
@@ -19,6 +21,7 @@ const AttributeTable: React.FC<AttributeTableProps> = ({
   const [editingCell, setEditingCell] = useState<{ id: string, field: string } | null>(null);
   const [editValue, setEditValue] = useState('');
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
+  const [currentPage, setCurrentPage] = useState(1);
 
   const columns = useMemo(() => {
     if (data.length === 0) return [];
@@ -31,13 +34,24 @@ const AttributeTable: React.FC<AttributeTableProps> = ({
   }, [data]);
 
   const filteredData = useMemo(() => {
+      // Reset page when filters change
+      if (currentPage !== 1) setCurrentPage(1);
+      
       return data.filter(row => {
           return Object.entries(columnFilters).every(([key, filterVal]) => {
               if (!filterVal) return true;
               return String(row[key] || '').toLowerCase().includes((filterVal as string).toLowerCase());
           });
       });
-  }, [data, columnFilters]);
+  }, [data, columnFilters]); // Removed currentPage dependency to avoid loop
+
+  // Paginate the filtered data
+  const paginatedData = useMemo(() => {
+      const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+      return filteredData.slice(startIndex, startIndex + ITEMS_PER_PAGE);
+  }, [filteredData, currentPage]);
+
+  const totalPages = Math.ceil(filteredData.length / ITEMS_PER_PAGE);
 
   const handleStartEdit = (id: string, field: string, currentValue: any) => {
     setEditingCell({ id, field });
@@ -64,10 +78,10 @@ const AttributeTable: React.FC<AttributeTableProps> = ({
   );
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 bg-slate-900 shadow-[0_-4px_10px_rgba(0,0,0,0.3)] z-[999] flex flex-col transition-all duration-300 h-[40vh] border-t border-slate-700 text-white">
+    <div className="absolute bottom-0 left-0 right-0 bg-slate-900 shadow-[0_-4px_10px_rgba(0,0,0,0.3)] z-[999] flex flex-col transition-all duration-300 h-[45vh] border-t border-slate-700 text-white">
       
       {/* Toolbar */}
-      <div className="flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700">
+      <div className="flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700 shrink-0">
         <div className="flex items-center gap-3">
             <h3 className="font-bold text-slate-200 text-sm flex items-center gap-2">
                 جدول البيانات ({filteredData.length})
@@ -90,7 +104,7 @@ const AttributeTable: React.FC<AttributeTableProps> = ({
       </div>
 
       {/* Table Container */}
-      <div className="flex-1 overflow-auto custom-scrollbar">
+      <div className="flex-1 overflow-auto custom-scrollbar relative">
         <table className="w-full text-sm text-right border-collapse relative">
           <thead className="bg-slate-800 text-slate-300 sticky top-0 shadow-sm z-10">
             <tr>
@@ -115,7 +129,7 @@ const AttributeTable: React.FC<AttributeTableProps> = ({
             </tr>
           </thead>
           <tbody>
-            {filteredData.map((row, idx) => (
+            {paginatedData.map((row, idx) => (
               <tr key={row.id} className="hover:bg-slate-800 transition-colors border-b border-slate-800/50 group">
                 <td className="p-2 text-center text-slate-500 text-xs bg-slate-900 group-hover:bg-slate-800 sticky left-0 border-r border-slate-700">
                     <button 
@@ -158,6 +172,50 @@ const AttributeTable: React.FC<AttributeTableProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Pagination Footer */}
+      <div className="bg-slate-800 border-t border-slate-700 p-2 flex items-center justify-between shrink-0">
+         <span className="text-xs text-slate-400 px-2">
+            عرض {paginatedData.length} من أصل {filteredData.length} سجل
+         </span>
+         
+         <div className="flex items-center gap-1">
+            <button 
+                onClick={() => setCurrentPage(1)} 
+                disabled={currentPage === 1}
+                className="p-1 rounded hover:bg-slate-700 text-slate-300 disabled:text-slate-600 disabled:hover:bg-transparent"
+            >
+                <ChevronsRight size={16} />
+            </button>
+            <button 
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))} 
+                disabled={currentPage === 1}
+                className="p-1 rounded hover:bg-slate-700 text-slate-300 disabled:text-slate-600 disabled:hover:bg-transparent"
+            >
+                <ChevronRight size={16} />
+            </button>
+            
+            <span className="text-xs bg-slate-900 px-3 py-1 rounded text-slate-200 min-w-[3rem] text-center border border-slate-700">
+                {currentPage} / {totalPages || 1}
+            </span>
+            
+            <button 
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} 
+                disabled={currentPage === totalPages || totalPages === 0}
+                className="p-1 rounded hover:bg-slate-700 text-slate-300 disabled:text-slate-600 disabled:hover:bg-transparent"
+            >
+                <ChevronLeft size={16} />
+            </button>
+            <button 
+                onClick={() => setCurrentPage(totalPages)} 
+                disabled={currentPage === totalPages || totalPages === 0}
+                className="p-1 rounded hover:bg-slate-700 text-slate-300 disabled:text-slate-600 disabled:hover:bg-transparent"
+            >
+                <ChevronsLeft size={16} />
+            </button>
+         </div>
+      </div>
+
     </div>
   );
 };
