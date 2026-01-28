@@ -81,17 +81,93 @@ const OptimizedLayer = ({
         // Performance: Remove group from map during batch addition
         group.removeFrom(map);
 
-        layer.data.forEach(customer => {
+        // --- FILTERING LOGIC FOR HIGH PERFORMANCE ---
+        // If there is a selection, we ONLY render selected items.
+        // If there are filters, we filter data first.
+        const hasSelection = (selectedCustomerIds && selectedCustomerIds.size > 0) || !!selectedCustomerId;
+        const activeFilters = filters.filter(f => f.style?.enabled || f.value);
+
+        const baseRadius = (layer.pointSize || 8) / 2; 
+
+        // Apply filters and selection logic to get ONLY points to render
+        const pointsToRender = layer.data.filter(customer => {
+             // 1. Check Selection Strict Mode (If something is selected, hide others)
+             if (hasSelection) {
+                 const isSelected = customer.id === selectedCustomerId || selectedCustomerIds?.has(customer.id);
+                 if (!isSelected) return false;
+             }
+
+             // 2. Check Standard Filters (if enabled)
+             if (activeFilters.length > 0) {
+                 for (const filter of filters) {
+                    // Skip style-only filters here, we handle coloring later. 
+                    // But if filter has value, it effectively hides rows in table, so we should hide on map too?
+                    // The App.tsx already filters layer.data based on "logic" filters.
+                    // But for Highlight filters, we keep them.
+                    
+                    // Actually, Layer.data passed here is ALREADY filtered by Legend and Logic Filters from App.tsx.
+                    // So we mainly care about "Selection" here.
+                 }
+             }
+             
+             return true;
+        });
+
+
+        pointsToRender.forEach(customer => {
             // Safety check for coordinates
             if (typeof customer.lat !== 'number' || typeof customer.lng !== 'number') return;
+            
+            // Determine Style
+            let color = layer.defaultColor;
+            let radius = baseRadius;
+            let weight = 1;
+            let strokeColor = '#000';
+            let fillOpacity = 0.8;
+
+            // From Data Map
+            const colorKey = String(customer[layer.colorByField] || 'DEFAULT');
+            if (layer.colorMap[colorKey]) {
+                color = layer.colorMap[colorKey];
+            }
+            if (customer._customColor) color = customer._customColor;
+
+            // Apply Highlight Filters
+            for (const filter of activeFilters) {
+                 if (!filter.style?.enabled) continue;
+                 const val = String(customer[filter.field] || '').toLowerCase();
+                 const filterVal = filter.value.toLowerCase();
+                 if (!filterVal) continue;
+
+                 let match = false;
+                 if (filter.operator === 'contains') match = val.includes(filterVal);
+                 else if (filter.operator === 'equals') match = val === filterVal;
+                 else if (filter.operator === 'in') match = filterVal.split(',').map(s => s.trim()).includes(val);
+                 
+                 if (match) {
+                     color = filter.style!.color;
+                     // Optional: Change shape? Canvas circleMarker only supports circle.
+                     break; 
+                 }
+            }
+
+            // Apply Selection Style
+            const isSelected = customer.id === selectedCustomerId || selectedCustomerIds?.has(customer.id);
+            
+            if (isSelected) {
+                radius = baseRadius + 4;
+                strokeColor = '#fff';
+                weight = 3;
+                fillOpacity = 1;
+            }
 
             const marker = L.circleMarker([customer.lat, customer.lng], {
                 renderer: myRenderer,
-                radius: 5, // Initial radius
-                weight: 1,
-                color: '#000',
-                fillColor: layer.defaultColor,
-                fillOpacity: 0.8
+                radius: radius,
+                weight: weight,
+                color: strokeColor,
+                fillColor: color,
+                fillOpacity: fillOpacity
             });
 
             // Store data reference on the marker options/object for retrieval later
@@ -141,86 +217,9 @@ const OptimizedLayer = ({
                 layerGroupRef.current = null;
             }
         };
-    }, [layer.data, layer.id, layer.labelByField]); // Dependencies for RE-CREATING markers
-
-    // 2. Efficient Style Updates (Colors, Filters, Selection)
-    useEffect(() => {
-        const group = layerGroupRef.current;
-        if (!group) return;
-
-        const hasSelection = (selectedCustomerIds && selectedCustomerIds.size > 0) || !!selectedCustomerId;
-        const activeFilters = filters.filter(f => f.style?.enabled);
-        
-        const baseRadius = (layer.pointSize || 8) / 2; 
-
-        group.eachLayer((l: any) => {
-            if (!(l instanceof L.CircleMarker)) return;
-            const customer = (l as any).customData as CustomerData;
-            
-            // --- 1. Determine Color ---
-            let color = layer.defaultColor;
-            
-            // From Data Map
-            const colorKey = String(customer[layer.colorByField] || 'DEFAULT');
-            if (layer.colorMap[colorKey]) {
-                color = layer.colorMap[colorKey];
-            }
-
-            // From Custom Override
-            if (customer._customColor) color = customer._customColor;
-            
-            // From Filters (Highlighting)
-            for (const filter of activeFilters) {
-                 const val = String(customer[filter.field] || '').toLowerCase();
-                 const filterVal = filter.value.toLowerCase();
-                 if (!filterVal) continue;
-
-                 let match = false;
-                 if (filter.operator === 'contains') match = val.includes(filterVal);
-                 else if (filter.operator === 'equals') match = val === filterVal;
-                 else if (filter.operator === 'in') match = filterVal.split(',').map(s => s.trim()).includes(val);
-                 
-                 if (match && filter.style) {
-                     color = filter.style.color;
-                     break; 
-                 }
-            }
-
-            // --- 2. Determine State (Selected/Dimmed) ---
-            const isSelected = customer.id === selectedCustomerId || selectedCustomerIds?.has(customer.id);
-            const isDimmed = hasSelection && !isSelected;
-
-            // --- 3. Apply Style ---
-            if (isSelected) {
-                l.setStyle({
-                    radius: baseRadius + 4,
-                    color: '#fff',
-                    weight: 3,
-                    fillColor: color,
-                    fillOpacity: 1
-                });
-                if (!l.isPopupOpen()) l.openPopup();
-                l.bringToFront();
-            } else if (isDimmed) {
-                l.setStyle({
-                    radius: baseRadius,
-                    color: color,
-                    weight: 1,
-                    fillColor: color,
-                    fillOpacity: 0.2
-                });
-            } else {
-                l.setStyle({
-                    radius: baseRadius,
-                    color: 'rgba(0,0,0,0.3)',
-                    weight: 1,
-                    fillColor: color,
-                    fillOpacity: 0.8
-                });
-            }
-        });
-
-    }, [layer, filters, selectedCustomerIds, selectedCustomerId]); // Dependencies for STYLING
+    }, [layer.data, layer.id, layer.labelByField, selectedCustomerIds, selectedCustomerId, filters]); 
+    // ^ Re-run effect completely on selection change. 
+    // This is faster than iterating 100k markers to setOpacity(0).
 
     return null;
 };
@@ -459,6 +458,9 @@ const MapComponent: React.FC<MapComponentProps> = ({
 
     setSelectionShape({ type: 'poly', points });
     const selected: { data: CustomerData, layerId: string }[] = [];
+    
+    // Performance: If using OptimizedLayer (1000+ points), we might want to query data directly rather than leafleting
+    // But standard geoUtils works on Data Arrays, which is fast.
     layers.filter(l => l.visible).forEach(layer => {
         const inPoly = filterDataByPolygon(layer.data, points);
         inPoly.forEach(d => selected.push({ data: d, layerId: layer.id }));
@@ -631,11 +633,20 @@ const MapComponent: React.FC<MapComponentProps> = ({
                     // Skip invalid data to prevent crashes
                     if (typeof customer.lat !== 'number' || typeof customer.lng !== 'number') return null;
 
+                    // STRICT FILTERING FOR SELECTION IN STANDARD MODE TOO
+                    const hasSelection = (selectedCustomerIds && selectedCustomerIds.size > 0) || !!selectedCustomerId;
+                    if (hasSelection) {
+                         const isSelected = customer.id === selectedCustomerId || selectedCustomerIds?.has(customer.id);
+                         if (!isSelected) return null;
+                    }
+
                     const style = getStyle(customer, layer);
                     const isSingleSelected = customer.id === selectedCustomerId;
                     const isMultiSelected = selectedCustomerIds?.has(customer.id) ?? false;
                     const isAnySelected = isSingleSelected || isMultiSelected;
-                    const isDimmed = selectedCustomerIds && selectedCustomerIds.size > 0 && !isMultiSelected;
+                    
+                    // Dimming is deprecated, we now hide unselected, so opacity is always 1 for rendered items
+                    const opacity = 1;
 
                     const PopupContent = (
                          <Popup>
@@ -673,7 +684,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
                             key={customer.id}
                             position={[customer.lat, customer.lng]}
                             icon={createCustomIcon(style.shape, style.color, layer.pointSize || 12, isAnySelected)}
-                            opacity={isDimmed ? 0.3 : 1}
+                            opacity={opacity}
                             eventHandlers={eventHandlers}
                         >
                             {layer.labelByField && customer[layer.labelByField] && (
