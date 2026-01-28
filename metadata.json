@@ -1,0 +1,7 @@
+{
+  "name": "GeoExcel Mapper",
+  "description": "تطبيق ويب تفاعلي لرفع ملفات إكسل وعرض بيانات العملاء على الخريطة، مع إمكانية التلوين المخصص، التعديل، والتحليل الذكي باستخدام Gemini.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
