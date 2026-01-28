@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { MapContainer, TileLayer, Popup, useMap, useMapEvents, Polygon, Circle, Marker, Tooltip } from 'react-leaflet';
+import { MapContainer, TileLayer, Popup, useMap, useMapEvents, Polygon, Circle, Marker, Tooltip, Polyline } from 'react-leaflet';
 import { LayerConfig, CustomerData, SelectionMode, GeoPoint, ShapeType, FilterRule, BoundingBox } from '../types';
 import { LatLngBoundsExpression } from 'leaflet';
 import * as L from 'leaflet';
@@ -42,10 +42,8 @@ const createCustomIcon = (shape: ShapeType, color: string, baseSize: number, isS
     });
 };
 
-// --- High Performance Canvas Layer ---
-// This component handles massive datasets by bypassing React's reconciliation
-// and directly manipulating Leaflet layers.
-const LeafletCanvasLayer = ({ 
+// --- Optimized Canvas Layer for Large Datasets ---
+const OptimizedLayer = ({ 
     layer, 
     onSelect, 
     selectedCustomerIds, 
@@ -60,25 +58,44 @@ const LeafletCanvasLayer = ({
 }) => {
     const map = useMap();
     const layerGroupRef = useRef<L.LayerGroup | null>(null);
+    const rendererRef = useRef<L.Canvas | null>(null);
 
-    // 1. Create Markers (Geometry Only) - Runs only when data changes
+    // 1. Initialize & Render Data
     useEffect(() => {
+        // Create group if not exists
         if (!layerGroupRef.current) {
             layerGroupRef.current = L.layerGroup().addTo(map);
         }
+        
+        // Create renderer if not exists
+        if (!rendererRef.current) {
+            rendererRef.current = L.canvas({ padding: 0.5 });
+        }
+
         const group = layerGroupRef.current;
+        const myRenderer = rendererRef.current;
+        
+        // Clear previous content
         group.clearLayers();
 
+        // Performance: Remove group from map during batch addition
+        group.removeFrom(map);
+
         layer.data.forEach(customer => {
-            // Force Canvas renderer for performance
+            // Safety check for coordinates
+            if (typeof customer.lat !== 'number' || typeof customer.lng !== 'number') return;
+
             const marker = L.circleMarker([customer.lat, customer.lng], {
-                renderer: L.canvas(),
-                radius: 4, // Default, will be updated by style effect
-                weight: 1
+                renderer: myRenderer,
+                radius: 5, // Initial radius
+                weight: 1,
+                color: '#000',
+                fillColor: layer.defaultColor,
+                fillOpacity: 0.8
             });
-            
-            // Attach data directly to marker object
-            (marker as any).customerData = customer;
+
+            // Store data reference on the marker options/object for retrieval later
+            (marker as any).customData = customer;
 
             marker.on('click', (e) => {
                 L.DomEvent.stopPropagation(e);
@@ -114,38 +131,54 @@ const LeafletCanvasLayer = ({
             group.addLayer(marker);
         });
 
-        // Cleanup function not needed for group removal here to allow smooth style updates,
-        // cleanup happens on unmount.
-    }, [layer.data, map, layer.id, layer.name, layer.labelByField]); 
+        // Add group back to map
+        group.addTo(map);
 
-    // 2. Update Styles (Colors, Selection, Filters) - Runs efficiently on interaction
+        return () => {
+            if (layerGroupRef.current) {
+                layerGroupRef.current.clearLayers();
+                layerGroupRef.current.remove();
+                layerGroupRef.current = null;
+            }
+        };
+    }, [layer.data, layer.id, layer.labelByField]); // Dependencies for RE-CREATING markers
+
+    // 2. Efficient Style Updates (Colors, Filters, Selection)
     useEffect(() => {
         const group = layerGroupRef.current;
         if (!group) return;
 
         const hasSelection = (selectedCustomerIds && selectedCustomerIds.size > 0) || !!selectedCustomerId;
         const activeFilters = filters.filter(f => f.style?.enabled);
-        const baseRadius = (layer.pointSize || 12) / 2.5;
+        
+        const baseRadius = (layer.pointSize || 8) / 2; 
 
         group.eachLayer((l: any) => {
             if (!(l instanceof L.CircleMarker)) return;
-            const customer = (l as any).customerData as CustomerData;
+            const customer = (l as any).customData as CustomerData;
             
-            // Base Color Logic
-            let color = layer.colorMap[String(customer[layer.colorByField] || 'DEFAULT')] || layer.defaultColor;
+            // --- 1. Determine Color ---
+            let color = layer.defaultColor;
+            
+            // From Data Map
+            const colorKey = String(customer[layer.colorByField] || 'DEFAULT');
+            if (layer.colorMap[colorKey]) {
+                color = layer.colorMap[colorKey];
+            }
+
+            // From Custom Override
             if (customer._customColor) color = customer._customColor;
             
-            // Filter Highlight Logic
+            // From Filters (Highlighting)
             for (const filter of activeFilters) {
                  const val = String(customer[filter.field] || '').toLowerCase();
                  const filterVal = filter.value.toLowerCase();
-                 let match = false;
-                 
-                 // Skip empty filters
                  if (!filterVal) continue;
 
+                 let match = false;
                  if (filter.operator === 'contains') match = val.includes(filterVal);
                  else if (filter.operator === 'equals') match = val === filterVal;
+                 else if (filter.operator === 'in') match = filterVal.split(',').map(s => s.trim()).includes(val);
                  
                  if (match && filter.style) {
                      color = filter.style.color;
@@ -153,49 +186,41 @@ const LeafletCanvasLayer = ({
                  }
             }
 
-            // Selection Logic
+            // --- 2. Determine State (Selected/Dimmed) ---
             const isSelected = customer.id === selectedCustomerId || selectedCustomerIds?.has(customer.id);
             const isDimmed = hasSelection && !isSelected;
 
+            // --- 3. Apply Style ---
             if (isSelected) {
                 l.setStyle({
+                    radius: baseRadius + 4,
                     color: '#fff',
+                    weight: 3,
                     fillColor: color,
-                    weight: 2,
-                    radius: 8,
                     fillOpacity: 1
                 });
                 if (!l.isPopupOpen()) l.openPopup();
                 l.bringToFront();
             } else if (isDimmed) {
                 l.setStyle({
-                    color: color,
-                    fillColor: color,
-                    weight: 1,
                     radius: baseRadius,
+                    color: color,
+                    weight: 1,
+                    fillColor: color,
                     fillOpacity: 0.2
                 });
             } else {
                 l.setStyle({
-                    color: color,
-                    fillColor: color,
-                    weight: 1,
                     radius: baseRadius,
+                    color: 'rgba(0,0,0,0.3)',
+                    weight: 1,
+                    fillColor: color,
                     fillOpacity: 0.8
                 });
             }
         });
 
-    }, [layer, filters, selectedCustomerIds, selectedCustomerId]);
-
-    useEffect(() => {
-        return () => {
-            if (layerGroupRef.current) {
-                layerGroupRef.current.remove();
-                layerGroupRef.current = null;
-            }
-        };
-    }, []);
+    }, [layer, filters, selectedCustomerIds, selectedCustomerId]); // Dependencies for STYLING
 
     return null;
 };
@@ -221,9 +246,16 @@ const BoundsFitter = ({ data }: { data: CustomerData[] }) => {
   useEffect(() => {
     if (data.length > 0) {
       try {
-          const bounds: LatLngBoundsExpression = data.map(d => [d.lat, d.lng]);
+          const validPoints = data.filter(d => 
+              typeof d.lat === 'number' && typeof d.lng === 'number' &&
+              !isNaN(d.lat) && !isNaN(d.lng)
+          );
+          if (validPoints.length === 0) return;
+          const bounds: LatLngBoundsExpression = validPoints.map(d => [d.lat, d.lng]);
           map.fitBounds(bounds, { padding: [50, 50], maxZoom: 12 });
-      } catch(e) { }
+      } catch(e) { 
+          console.warn("Bounds fit error ignored:", e);
+      }
     }
   }, [data.length, map]); 
   return null;
@@ -231,13 +263,36 @@ const BoundsFitter = ({ data }: { data: CustomerData[] }) => {
 
 const MapInteractionHandler = ({ 
     selectionMode, 
-    onClosePopup 
+    onClosePopup,
+    cursorMode
 }: { 
     selectionMode: SelectionMode,
-    onClosePopup: () => void
+    onClosePopup: () => void,
+    cursorMode: 'hand' | 'arrow'
 }) => {
     const map = useMap();
     const [popupInfo, setPopupInfo] = useState<{lat: number, lng: number, content: string} | null>(null);
+
+    // Effect to handle Cursor/Drag modes effectively
+    useEffect(() => {
+        if (!map) return;
+        const container = map.getContainer();
+
+        if (cursorMode === 'hand') {
+            map.dragging.enable();
+            container.style.cursor = 'grab';
+        } else {
+            // Arrow mode: Disable drag to allow easy clicking/selection without moving map
+            map.dragging.disable();
+            container.style.cursor = 'default';
+        }
+
+        // Clean up on unmount or change
+        return () => {
+             container.style.cursor = '';
+        }
+    }, [cursorMode, map]);
+
 
     useMapEvents({
         click(e) {
@@ -268,7 +323,10 @@ const MapInteractionHandler = ({
         } else {
             map.doubleClickZoom.enable();
         }
-        return () => { map.doubleClickZoom.enable(); };
+        return () => { 
+            // Safety check in case map is destroyed
+            try { map.doubleClickZoom.enable(); } catch (e) {}
+        };
     }, [map, selectionMode]);
 
     return null;
@@ -286,6 +344,7 @@ const DrawController = ({
     const [points, setPoints] = useState<GeoPoint[]>([]);
     const [circleCenter, setCircleCenter] = useState<GeoPoint | null>(null);
     const [tempRadius, setTempRadius] = useState<number>(0);
+    const [mousePos, setMousePos] = useState<L.LatLng | null>(null);
     
     useMapEvents({
         click(e) {
@@ -303,6 +362,8 @@ const DrawController = ({
             }
         },
         mousemove(e) {
+            setMousePos(e.latlng); // Track mouse everywhere for guide lines
+            
             if (mode === 'circle' && circleCenter) {
                 const r = getDistanceMeters(circleCenter, { lat: e.latlng.lat, lng: e.latlng.lng });
                 setTempRadius(r);
@@ -321,14 +382,33 @@ const DrawController = ({
 
     return (
         <>
-            {mode === 'polygon' && points.length > 0 && (
+            {mode === 'polygon' && (
                 <>
-                    <Polygon positions={points.map(p => [p.lat, p.lng])} color="#3b82f6" dashArray="5, 5" />
+                    {/* Render Polygon so far */}
+                    {points.length > 0 && (
+                        <Polygon positions={points.map(p => [p.lat, p.lng])} color="#3b82f6" dashArray="5, 5" />
+                    )}
+                    
+                    {/* Render Vertices */}
                     {points.map((p, i) => (
                         <Marker key={i} position={[p.lat, p.lng]} icon={L.divIcon({ className: 'w-2 h-2 bg-blue-500 rounded-full border border-white', iconSize: [8,8] })} />
                     ))}
+
+                    {/* Render Guide Line (Rubber Band) */}
+                    {points.length > 0 && mousePos && (
+                        <Polyline 
+                            positions={[
+                                [points[points.length - 1].lat, points[points.length - 1].lng], 
+                                [mousePos.lat, mousePos.lng]
+                            ]} 
+                            color="#ef4444" 
+                            weight={2}
+                            dashArray="4, 4" 
+                        />
+                    )}
                 </>
             )}
+
             {mode === 'circle' && circleCenter && (
                 <Circle center={[circleCenter.lat, circleCenter.lng]} radius={tempRadius} color="#3b82f6" dashArray="5, 5" />
             )}
@@ -416,12 +496,13 @@ const MapComponent: React.FC<MapComponentProps> = ({
              const val = String(customer[filter.field] || '').toLowerCase();
              const filterVal = filter.value.toLowerCase();
              
-             // Skip empty filters in style check too
              if (!filterVal) continue;
 
              let match = false;
              if (filter.operator === 'contains') match = val.includes(filterVal);
              else if (filter.operator === 'equals') match = val === filterVal;
+             else if (filter.operator === 'in') match = filterVal.split(',').map(s => s.trim()).includes(val);
+
              if (match) return { color: filter.style.color, shape: filter.style.shape };
         }
     }
@@ -434,7 +515,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
   };
 
   return (
-    <div className={`relative h-full w-full group ${selectionMode !== 'none' || isSelectingSearchArea ? 'cursor-crosshair' : (cursorMode === 'arrow' ? 'cursor-default' : 'cursor-grab active:cursor-grabbing')}`}>
+    <div className={`relative h-full w-full group`}>
         
         {!isSelectingSearchArea && (
             <div className="absolute top-4 left-4 z-[1000] flex flex-col gap-2 bg-slate-800/90 backdrop-blur rounded-lg shadow-md p-1.5 border border-slate-600">
@@ -464,18 +545,18 @@ const MapComponent: React.FC<MapComponentProps> = ({
 
                 <div className="w-full h-[1px] bg-slate-600 my-0.5"></div>
 
-                {/* Cursor Mode Tools (Moved here) */}
+                {/* Cursor Mode Tools */}
                 <button 
                     onClick={() => onSetCursorMode && onSetCursorMode('arrow')}
                     className={`p-2 rounded-md transition-colors ${cursorMode === 'arrow' ? 'bg-blue-600 text-white' : 'hover:bg-slate-700 text-slate-300'}`}
-                    title="مؤشر سهم (للنقر)"
+                    title="مؤشر سهم (تحديد فقط)"
                 >
                     <MousePointer2 size={20} />
                 </button>
                  <button 
                     onClick={() => onSetCursorMode && onSetCursorMode('hand')}
                     className={`p-2 rounded-md transition-colors ${cursorMode === 'hand' ? 'bg-blue-600 text-white' : 'hover:bg-slate-700 text-slate-300'}`}
-                    title="مؤشر يد (للتحريك)"
+                    title="مؤشر يد (تحريك الخريطة)"
                 >
                     <Hand size={20} />
                 </button>
@@ -496,7 +577,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
             style={{ height: '100%', width: '100%' }}
             zoomControl={false}
             doubleClickZoom={false}
-            minZoom={2}
+            minZoom={2} // Allow zooming out to world view
             preferCanvas={true} 
         >
             <TileLayer
@@ -505,7 +586,11 @@ const MapComponent: React.FC<MapComponentProps> = ({
                 className={!navigator.onLine ? 'opacity-0' : ''}
             />
             
-            <MapInteractionHandler selectionMode={selectionMode} onClosePopup={() => {}} />
+            <MapInteractionHandler 
+                selectionMode={selectionMode} 
+                onClosePopup={() => {}} 
+                cursorMode={cursorMode}
+            />
             <BoundsFitter data={allVisibleData} />
             
             <DrawController 
@@ -524,12 +609,13 @@ const MapComponent: React.FC<MapComponentProps> = ({
             {layers.map((layer) => {
                 if (!layer.visible) return null;
                 
-                // PERFORMANCE SWITCH: Use LeafletCanvasLayer for > 500 points
-                const useHighPerformanceMode = layer.data.length > 500;
+                // PERFORMANCE SWITCH: Use OptimizedLayer for > 1000 points
+                // This keeps standard beautiful markers for small files, and fast rendering for huge files.
+                const useOptimizedMode = layer.data.length > 1000;
 
-                if (useHighPerformanceMode) {
+                if (useOptimizedMode) {
                     return (
-                        <LeafletCanvasLayer 
+                        <OptimizedLayer 
                             key={layer.id}
                             layer={layer}
                             onSelect={onSelectCustomer}
@@ -540,7 +626,11 @@ const MapComponent: React.FC<MapComponentProps> = ({
                     );
                 }
 
+                // Standard Rendering for Small Datasets (< 1000)
                 return layer.data.map((customer) => {
+                    // Skip invalid data to prevent crashes
+                    if (typeof customer.lat !== 'number' || typeof customer.lng !== 'number') return null;
+
                     const style = getStyle(customer, layer);
                     const isSingleSelected = customer.id === selectedCustomerId;
                     const isMultiSelected = selectedCustomerIds?.has(customer.id) ?? false;
