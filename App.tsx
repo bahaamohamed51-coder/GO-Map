@@ -74,6 +74,10 @@ const App: React.FC = () => {
           visibleData = visibleData.filter(item => {
             return filters.every(filter => {
               if (filter.style?.enabled) return true;
+              
+              // FIX: Ignore empty filter values to prevent hiding all data while typing
+              if (!filter.value) return true;
+
               const itemVal = item[filter.field];
               if (itemVal == null) return false;
               const strVal = String(itemVal).toLowerCase();
@@ -285,31 +289,30 @@ const App: React.FC = () => {
   return (
     <div className={`flex flex-col h-screen overflow-hidden bg-gray-900 font-sans ${isFullScreen ? 'fixed inset-0 z-[9999] bg-gray-900' : ''}`} dir="rtl">
       
-      {!isFullScreen && (
-          <header className="bg-slate-800 shadow-md h-14 border-b border-slate-700 flex items-center justify-between px-4 z-20">
-            <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
-                    <MapIcon size={20} />
-                </div>
-                <h1 className="font-bold text-lg text-white hidden md:block">GeoExcel Mapper</h1>
+      {/* Header always visible now, removed check */}
+      <header className="bg-slate-800 shadow-md h-14 border-b border-slate-700 flex items-center justify-between px-4 z-20 shrink-0">
+        <div className="flex items-center gap-2">
+            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white">
+                <MapIcon size={20} />
             </div>
-            
-            <div className="flex items-center gap-3">
-                <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 text-blue-400 rounded-lg hover:bg-slate-600 cursor-pointer transition-colors text-sm font-medium border border-slate-600">
-                    <Upload size={16} />
-                    <span>رفع ملف</span>
-                    <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} />
-                </label>
-                <button onClick={handleExport} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 text-green-400 rounded-lg hover:bg-slate-600 transition-colors text-sm font-medium border border-slate-600">
-                    <Download size={16} />
-                    <span>تصدير (المفلتر)</span>
-                </button>
-                <button onClick={toggleFullScreen} className="p-2 hover:bg-slate-700 text-white rounded-lg transition-colors" title="ملء الشاشة">
-                    <Maximize2 size={20} />
-                </button>
-            </div>
-          </header>
-      )}
+            <h1 className="font-bold text-lg text-white hidden md:block">GeoExcel Mapper</h1>
+        </div>
+        
+        <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 text-blue-400 rounded-lg hover:bg-slate-600 cursor-pointer transition-colors text-sm font-medium border border-slate-600">
+                <Upload size={16} />
+                <span>رفع ملف</span>
+                <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} />
+            </label>
+            <button onClick={handleExport} className="flex items-center gap-2 px-3 py-1.5 bg-slate-700 text-green-400 rounded-lg hover:bg-slate-600 transition-colors text-sm font-medium border border-slate-600">
+                <Download size={16} />
+                <span>تصدير (المفلتر)</span>
+            </button>
+            <button onClick={toggleFullScreen} className="p-2 hover:bg-slate-700 text-white rounded-lg transition-colors" title="ملء الشاشة">
+                <Maximize2 size={20} />
+            </button>
+        </div>
+      </header>
 
       <div className="flex flex-1 overflow-hidden relative">
         <div className={`
@@ -338,28 +341,6 @@ const App: React.FC = () => {
             <div className="flex-1 overflow-y-auto p-4 space-y-2 custom-scrollbar">
                 {activeTab === 'layers' && (
                     <>
-                        <div className="bg-slate-900 p-2 rounded-lg border border-slate-700 mb-3 flex items-center justify-between">
-                            <span className="text-xs text-slate-400 font-bold flex items-center gap-1">
-                                <MousePointer2 size={12} /> نمط المؤشر:
-                            </span>
-                            <div className="flex bg-slate-800 rounded p-1 border border-slate-600">
-                                <button 
-                                    onClick={() => setCursorMode('arrow')} 
-                                    className={`p-1.5 rounded transition-colors ${cursorMode === 'arrow' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
-                                    title="مؤشر سهم"
-                                >
-                                    <MousePointer2 size={16}/>
-                                </button>
-                                <button 
-                                    onClick={() => setCursorMode('hand')} 
-                                    className={`p-1.5 rounded transition-colors ${cursorMode === 'hand' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
-                                    title="مؤشر يد (تحريك)"
-                                >
-                                    <Hand size={16}/>
-                                </button>
-                            </div>
-                        </div>
-
                         <div className="flex items-center justify-between mb-3">
                              <h2 className="font-bold text-white text-sm">قائمة الطبقات ({layers.length})</h2>
                         </div>
@@ -446,6 +427,7 @@ const App: React.FC = () => {
                     if (!isSidebarOpen) setIsSidebarOpen(true); 
                 }}
                 cursorMode={cursorMode}
+                onSetCursorMode={setCursorMode}
             />
             
             <div className="absolute bottom-6 left-6 z-[999]">
