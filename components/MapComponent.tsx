@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, Popup, useMap, useMapEvents, Polygon, Circle, Marker, Tooltip } from 'react-leaflet';
+import React, { useState, useEffect, useMemo } from 'react';
+import { MapContainer, TileLayer, Popup, useMap, useMapEvents, Polygon, Circle, Marker, CircleMarker, Tooltip } from 'react-leaflet';
 import { LayerConfig, CustomerData, SelectionMode, GeoPoint, ShapeType, FilterRule, BoundingBox } from '../types';
 import { LatLngBoundsExpression } from 'leaflet';
 import * as L from 'leaflet';
 import { Circle as CircleIcon, Hexagon, Eraser, Spline } from 'lucide-react';
 import { filterDataByCircle, filterDataByPolygon, getDistanceMeters } from '../utils/geoUtils';
 import { fetchAddressForPoint } from '../utils/apiService';
+import { EGYPT_BOUNDS, DEFAULT_CENTER, DEFAULT_ZOOM } from '../constants';
 
 const getShapeSVG = (shape: ShapeType, color: string, size: number, isSelected: boolean) => {
     const stroke = isSelected ? '#fff' : '#00000033';
@@ -60,7 +61,7 @@ const BoundsFitter = ({ data }: { data: CustomerData[] }) => {
     if (data.length > 0) {
       try {
           const bounds: LatLngBoundsExpression = data.map(d => [d.lat, d.lng]);
-          map.fitBounds(bounds, { padding: [50, 50], maxZoom: 14 });
+          map.fitBounds(bounds, { padding: [50, 50], maxZoom: 12 });
       } catch(e) { }
     }
   }, [data.length, map]); 
@@ -80,7 +81,6 @@ const MapInteractionHandler = ({
 
     useMapEvents({
         click(e) {
-            // Single click hides custom popup
             if (popupInfo) {
                 setPopupInfo(null);
                 map.closePopup();
@@ -88,13 +88,19 @@ const MapInteractionHandler = ({
             onClosePopup();
         },
         dblclick(e) {
-            if (selectionMode !== 'none') return; // Don't trigger if drawing
+            if (selectionMode !== 'none') return;
             
-            // Fetch address on double click
             L.DomEvent.stopPropagation(e);
-            const { lat, lng } = e.latlng;
             
-            // Show loading popup immediately
+            if (!navigator.onLine) {
+                 L.popup()
+                .setLatLng(e.latlng)
+                .setContent('<div class="text-center text-xs p-2 text-slate-200">وضع غير متصل: لا يمكن جلب العنوان</div>')
+                .openOn(map);
+                return;
+            }
+
+            const { lat, lng } = e.latlng;
             const popup = L.popup()
                 .setLatLng(e.latlng)
                 .setContent('<div class="text-center text-xs p-2 text-slate-200">جاري جلب البيانات...</div>')
@@ -116,7 +122,6 @@ const MapInteractionHandler = ({
         }
     });
 
-    // Disable default double click zoom if we use it for info
     useEffect(() => {
         if (selectionMode === 'none') {
             map.doubleClickZoom.disable();
@@ -165,7 +170,6 @@ const DrawController = ({
         },
         dblclick(e) {
             if (mode === 'polygon') {
-                // Prevent the map dblclick from firing
                 L.DomEvent.stopPropagation(e);
                 if (points.length > 2) {
                     onPolygonComplete(points);
@@ -206,20 +210,18 @@ const MapComponent: React.FC<MapComponentProps> = ({
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('none');
   const [selectionShape, setSelectionShape] = useState<any>(null);
 
-  // Switch to polygon mode if search area selection is active
   useEffect(() => {
       if (isSelectingSearchArea) {
           setSelectionMode('polygon');
           setSelectionShape(null); 
-      } else if (selectionMode === 'polygon' && !isSelectingSearchArea) {
-          // If we manually exited selection, ensure mode resets (handled by setSelectionMode usually)
       }
   }, [isSelectingSearchArea]);
 
-  const allVisibleData = layers.filter(l => l.visible).flatMap(l => l.data.map(d => ({ ...d, _layerId: l.id })));
+  const allVisibleData = useMemo(() => 
+    layers.filter(l => l.visible).flatMap(l => l.data.map(d => ({ ...d, _layerId: l.id }))),
+  [layers]);
 
   const handlePolygonComplete = (points: GeoPoint[]) => {
-    // If selecting for search, convert polygon to bounding box
     if (isSelectingSearchArea && onSearchAreaComplete) {
         const lats = points.map(p => p.lat);
         const lngs = points.map(p => p.lng);
@@ -268,6 +270,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
             shape: layer.shapeMap[String(customer[layer.shapeByField])] || layer.defaultShape 
         };
     }
+    // Optimization: Loop mostly for styled filters
     for (const filter of filters) {
         if (filter.style?.enabled) {
              const val = String(customer[filter.field] || '').toLowerCase();
@@ -289,7 +292,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
   return (
     <div className={`relative h-full w-full group ${selectionMode !== 'none' || isSelectingSearchArea ? 'cursor-crosshair' : (cursorMode === 'arrow' ? 'cursor-default' : 'cursor-grab active:cursor-grabbing')}`}>
         
-        {/* Map Toolbar - Dark Mode */}
         {!isSelectingSearchArea && (
             <div className="absolute top-4 left-4 z-[1000] flex flex-col gap-2 bg-slate-800/90 backdrop-blur rounded-lg shadow-md p-1.5 border border-slate-600">
                 <button 
@@ -325,15 +327,22 @@ const MapComponent: React.FC<MapComponentProps> = ({
         )}
 
         <MapContainer 
-            center={[30.0444, 31.2357]} 
-            zoom={6} 
+            center={[DEFAULT_CENTER.lat, DEFAULT_CENTER.lng]} 
+            zoom={DEFAULT_ZOOM} 
             style={{ height: '100%', width: '100%' }}
             zoomControl={false}
-            doubleClickZoom={false} // Managed manually
+            doubleClickZoom={false}
+            maxBounds={EGYPT_BOUNDS}
+            maxBoundsViscosity={1.0}
+            minZoom={5}
+            // PERFORMANCE: This is crucial. It tells Leaflet to try using Canvas for vector layers.
+            preferCanvas={true} 
         >
             <TileLayer
                 attribution='&copy; OpenStreetMap'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                errorTileUrl="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFhAJ/wlseKgAAAABJRU5ErkJggg=="
+                className={!navigator.onLine ? 'opacity-0' : ''}
             />
             
             <MapInteractionHandler selectionMode={selectionMode} onClosePopup={() => {}} />
@@ -354,6 +363,12 @@ const MapComponent: React.FC<MapComponentProps> = ({
 
             {layers.map((layer) => {
                 if (!layer.visible) return null;
+                
+                // PERFORMANCE SWITCH: 
+                // If data > 1000 points, use CircleMarker (Canvas-friendly, super fast).
+                // If data < 1000, use Marker (DOM-based, allows custom shapes).
+                const useHighPerformanceMode = layer.data.length > 1000;
+
                 return layer.data.map((customer) => {
                     const style = getStyle(customer, layer);
                     const isSingleSelected = customer.id === selectedCustomerId;
@@ -361,45 +376,77 @@ const MapComponent: React.FC<MapComponentProps> = ({
                     const isAnySelected = isSingleSelected || isMultiSelected;
                     const isDimmed = selectedCustomerIds && selectedCustomerIds.size > 0 && !isMultiSelected;
 
+                    // Common Popup Content
+                    const PopupContent = (
+                         <Popup>
+                            <div className="text-right" dir="rtl">
+                            <h3 className="font-bold text-sm mb-1 text-blue-400">{layer.name}</h3>
+                            <div className="text-xs space-y-1 text-slate-200">
+                                {Object.entries(customer).slice(0, 6).map(([key, val]) => {
+                                    if (key === 'id' || key === 'lat' || key === 'lng' || key === '_layerId' || key === '_customColor') return null;
+                                    return (
+                                        <div key={key}>
+                                            <span className="font-semibold text-slate-400">{key}: </span>
+                                            <span>{String(val)}</span>
+                                        </div>
+                                    )
+                                })}
+                                <div className="pt-2 text-[10px] text-slate-500">
+                                    {customer.lat.toFixed(5)}, {customer.lng.toFixed(5)}
+                                </div>
+                            </div>
+                            </div>
+                        </Popup>
+                    );
+
+                    // Click Handler
+                    const eventHandlers = {
+                        click: (e: any) => {
+                            L.DomEvent.stopPropagation(e);
+                            if (isSelectingSearchArea) return; 
+                            if (selectionMode !== 'none') return;
+                            onSelectCustomer(customer, layer.id);
+                        },
+                    };
+
+                    if (useHighPerformanceMode) {
+                        return (
+                            <CircleMarker
+                                key={customer.id}
+                                center={[customer.lat, customer.lng]}
+                                radius={isAnySelected ? 8 : 4} // Smaller dots for dense data
+                                pathOptions={{
+                                    color: isAnySelected ? '#fff' : style.color,
+                                    fillColor: style.color,
+                                    fillOpacity: isDimmed ? 0.2 : 0.8,
+                                    weight: isAnySelected ? 2 : 1
+                                }}
+                                eventHandlers={eventHandlers}
+                            >
+                                {layer.labelByField && customer[layer.labelByField] && isAnySelected && (
+                                     <Tooltip direction="top" offset={[0, -10]} opacity={0.9} permanent>
+                                        <span className="font-bold text-xs">{String(customer[layer.labelByField])}</span>
+                                    </Tooltip>
+                                )}
+                                {PopupContent}
+                            </CircleMarker>
+                        );
+                    }
+
                     return (
                         <Marker
                             key={customer.id}
                             position={[customer.lat, customer.lng]}
                             icon={createCustomIcon(style.shape, style.color, layer.pointSize || 12, isAnySelected)}
                             opacity={isDimmed ? 0.3 : 1}
-                            eventHandlers={{
-                                click: (e) => {
-                                    L.DomEvent.stopPropagation(e);
-                                    if (isSelectingSearchArea) return; 
-                                    if (selectionMode !== 'none') return; // Don't select markers while drawing
-                                    onSelectCustomer(customer, layer.id);
-                                },
-                            }}
+                            eventHandlers={eventHandlers}
                         >
                             {layer.labelByField && customer[layer.labelByField] && (
                                 <Tooltip direction="top" offset={[0, -10]} opacity={0.9} permanent>
                                     <span className="font-bold text-xs">{String(customer[layer.labelByField])}</span>
                                 </Tooltip>
                             )}
-                            <Popup>
-                                <div className="text-right" dir="rtl">
-                                <h3 className="font-bold text-sm mb-1 text-blue-400">{layer.name}</h3>
-                                <div className="text-xs space-y-1 text-slate-200">
-                                    {Object.entries(customer).slice(0, 6).map(([key, val]) => {
-                                        if (key === 'id' || key === 'lat' || key === 'lng' || key === '_layerId' || key === '_customColor') return null;
-                                        return (
-                                            <div key={key}>
-                                                <span className="font-semibold text-slate-400">{key}: </span>
-                                                <span>{String(val)}</span>
-                                            </div>
-                                        )
-                                    })}
-                                    <div className="pt-2 text-[10px] text-slate-500">
-                                        {customer.lat.toFixed(5)}, {customer.lng.toFixed(5)}
-                                    </div>
-                                </div>
-                                </div>
-                            </Popup>
+                            {PopupContent}
                         </Marker>
                     );
                 });
