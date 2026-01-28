@@ -1,14 +1,33 @@
 import { CustomerData, BoundingBox } from '../types';
 
+// Simple in-memory cache for addresses to speed up enrichment
+// Key: "lat,lng" (rounded to 4 decimal places for proximity hit), Value: Address String
+const addressCache = new Map<string, string>();
+
+const getCacheKey = (lat: number, lng: number) => `${lat.toFixed(4)},${lng.toFixed(4)}`;
+
 // Reverse Geocoding (Lat/Lng -> Address)
 export const fetchAddressForPoint = async (lat: number, lng: number): Promise<string> => {
+  const cacheKey = getCacheKey(lat, lng);
+  if (addressCache.has(cacheKey)) {
+    return addressCache.get(cacheKey)!;
+  }
+
   try {
     const response = await fetch(
       `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=14&addressdetails=1`,
       { headers: { 'User-Agent': 'GeoExcelMapper/1.0' } }
     );
+    
+    if (!response.ok) throw new Error("Network response was not ok");
+    
     const data = await response.json();
-    return data.address?.suburb || data.address?.neighbourhood || data.address?.city_district || data.address?.city || data.address?.town || 'غير معروف';
+    const address = data.address?.suburb || data.address?.neighbourhood || data.address?.city_district || data.address?.city || data.address?.town || 'غير معروف';
+    
+    // Save to cache
+    addressCache.set(cacheKey, address);
+    
+    return address;
   } catch (error) {
     console.error("Geocoding error", error);
     return 'خطأ';
