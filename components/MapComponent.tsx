@@ -357,7 +357,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
                 return layer.data.map((customer) => {
                     const style = getStyle(customer, layer);
                     const isSingleSelected = customer.id === selectedCustomerId;
-                    const isMultiSelected = selectedCustomerIds?.has(customer.id);
+                    const isMultiSelected = selectedCustomerIds?.has(customer.id) ?? false;
                     const isAnySelected = isSingleSelected || isMultiSelected;
                     const isDimmed = selectedCustomerIds && selectedCustomerIds.size > 0 && !isMultiSelected;
 
