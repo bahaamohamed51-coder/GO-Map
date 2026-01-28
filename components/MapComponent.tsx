@@ -6,7 +6,7 @@ import * as L from 'leaflet';
 import { Circle as CircleIcon, Eraser, Spline, MousePointer2, Hand } from 'lucide-react';
 import { filterDataByCircle, filterDataByPolygon, getDistanceMeters } from '../utils/geoUtils';
 import { fetchAddressForPoint } from '../utils/apiService';
-import { EGYPT_BOUNDS, DEFAULT_CENTER, DEFAULT_ZOOM } from '../constants';
+import { DEFAULT_CENTER, DEFAULT_ZOOM } from '../constants';
 
 // --- Icons Helpers ---
 const getShapeSVG = (shape: ShapeType, color: string, size: number, isSelected: boolean) => {
@@ -496,9 +496,7 @@ const MapComponent: React.FC<MapComponentProps> = ({
             style={{ height: '100%', width: '100%' }}
             zoomControl={false}
             doubleClickZoom={false}
-            maxBounds={EGYPT_BOUNDS}
-            maxBoundsViscosity={1.0}
-            minZoom={5}
+            minZoom={2}
             preferCanvas={true} 
         >
             <TileLayer
