@@ -1,13 +1,14 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { MapContainer, TileLayer, Popup, useMap, useMapEvents, Polygon, Circle, Marker, CircleMarker, Tooltip } from 'react-leaflet';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { MapContainer, TileLayer, Popup, useMap, useMapEvents, Polygon, Circle, Marker, Tooltip } from 'react-leaflet';
 import { LayerConfig, CustomerData, SelectionMode, GeoPoint, ShapeType, FilterRule, BoundingBox } from '../types';
 import { LatLngBoundsExpression } from 'leaflet';
 import * as L from 'leaflet';
-import { Circle as CircleIcon, Hexagon, Eraser, Spline } from 'lucide-react';
+import { Circle as CircleIcon, Eraser, Spline, MousePointer2, Hand } from 'lucide-react';
 import { filterDataByCircle, filterDataByPolygon, getDistanceMeters } from '../utils/geoUtils';
 import { fetchAddressForPoint } from '../utils/apiService';
 import { EGYPT_BOUNDS, DEFAULT_CENTER, DEFAULT_ZOOM } from '../constants';
 
+// --- Icons Helpers ---
 const getShapeSVG = (shape: ShapeType, color: string, size: number, isSelected: boolean) => {
     const stroke = isSelected ? '#fff' : '#00000033';
     const strokeWidth = isSelected ? 3 : 1;
@@ -41,6 +42,167 @@ const createCustomIcon = (shape: ShapeType, color: string, baseSize: number, isS
     });
 };
 
+// --- High Performance Canvas Layer ---
+// This component handles massive datasets by bypassing React's reconciliation
+// and directly manipulating Leaflet layers.
+const LeafletCanvasLayer = ({ 
+    layer, 
+    onSelect, 
+    selectedCustomerIds, 
+    selectedCustomerId,
+    filters 
+}: { 
+    layer: LayerConfig, 
+    onSelect: (c: CustomerData, layerId: string) => void,
+    selectedCustomerIds?: Set<string>,
+    selectedCustomerId?: string,
+    filters: FilterRule[]
+}) => {
+    const map = useMap();
+    const layerGroupRef = useRef<L.LayerGroup | null>(null);
+
+    // 1. Create Markers (Geometry Only) - Runs only when data changes
+    useEffect(() => {
+        if (!layerGroupRef.current) {
+            layerGroupRef.current = L.layerGroup().addTo(map);
+        }
+        const group = layerGroupRef.current;
+        group.clearLayers();
+
+        layer.data.forEach(customer => {
+            // Force Canvas renderer for performance
+            const marker = L.circleMarker([customer.lat, customer.lng], {
+                renderer: L.canvas(),
+                radius: 4, // Default, will be updated by style effect
+                weight: 1
+            });
+            
+            // Attach data directly to marker object
+            (marker as any).customerData = customer;
+
+            marker.on('click', (e) => {
+                L.DomEvent.stopPropagation(e);
+                onSelect(customer, layer.id);
+            });
+
+            // Bind Popup
+            const popupContent = `
+                <div class="text-right" dir="rtl">
+                    <h3 class="font-bold text-sm mb-1 text-blue-400">${layer.name}</h3>
+                    <div class="text-xs space-y-1 text-slate-200">
+                         ${Object.entries(customer).slice(0, 6).map(([key, val]) => {
+                            if (['id', 'lat', 'lng', '_layerId', '_customColor'].includes(key)) return '';
+                            return `<div><span class="font-semibold text-slate-400">${key}: </span><span>${val}</span></div>`;
+                         }).join('')}
+                         <div class="pt-2 text-[10px] text-slate-500">
+                            ${customer.lat.toFixed(5)}, ${customer.lng.toFixed(5)}
+                         </div>
+                    </div>
+                </div>
+            `;
+            marker.bindPopup(popupContent, { className: 'custom-popup-dark' });
+
+            if (layer.labelByField && customer[layer.labelByField]) {
+                marker.bindTooltip(String(customer[layer.labelByField]), { 
+                    direction: 'top', 
+                    offset: [0, -5],
+                    opacity: 0.9,
+                    className: 'font-bold text-xs bg-slate-800 text-white border-slate-600'
+                });
+            }
+
+            group.addLayer(marker);
+        });
+
+        // Cleanup function not needed for group removal here to allow smooth style updates,
+        // cleanup happens on unmount.
+    }, [layer.data, map, layer.id, layer.name, layer.labelByField]); 
+
+    // 2. Update Styles (Colors, Selection, Filters) - Runs efficiently on interaction
+    useEffect(() => {
+        const group = layerGroupRef.current;
+        if (!group) return;
+
+        const hasSelection = (selectedCustomerIds && selectedCustomerIds.size > 0) || !!selectedCustomerId;
+        const activeFilters = filters.filter(f => f.style?.enabled);
+        const baseRadius = (layer.pointSize || 12) / 2.5;
+
+        group.eachLayer((l: any) => {
+            if (!(l instanceof L.CircleMarker)) return;
+            const customer = (l as any).customerData as CustomerData;
+            
+            // Base Color Logic
+            let color = layer.colorMap[String(customer[layer.colorByField] || 'DEFAULT')] || layer.defaultColor;
+            if (customer._customColor) color = customer._customColor;
+            
+            // Filter Highlight Logic
+            for (const filter of activeFilters) {
+                 const val = String(customer[filter.field] || '').toLowerCase();
+                 const filterVal = filter.value.toLowerCase();
+                 let match = false;
+                 
+                 // Skip empty filters
+                 if (!filterVal) continue;
+
+                 if (filter.operator === 'contains') match = val.includes(filterVal);
+                 else if (filter.operator === 'equals') match = val === filterVal;
+                 
+                 if (match && filter.style) {
+                     color = filter.style.color;
+                     break; 
+                 }
+            }
+
+            // Selection Logic
+            const isSelected = customer.id === selectedCustomerId || selectedCustomerIds?.has(customer.id);
+            const isDimmed = hasSelection && !isSelected;
+
+            if (isSelected) {
+                l.setStyle({
+                    color: '#fff',
+                    fillColor: color,
+                    weight: 2,
+                    radius: 8,
+                    fillOpacity: 1
+                });
+                if (!l.isPopupOpen()) l.openPopup();
+                l.bringToFront();
+            } else if (isDimmed) {
+                l.setStyle({
+                    color: color,
+                    fillColor: color,
+                    weight: 1,
+                    radius: baseRadius,
+                    fillOpacity: 0.2
+                });
+            } else {
+                l.setStyle({
+                    color: color,
+                    fillColor: color,
+                    weight: 1,
+                    radius: baseRadius,
+                    fillOpacity: 0.8
+                });
+            }
+        });
+
+    }, [layer, filters, selectedCustomerIds, selectedCustomerId]);
+
+    useEffect(() => {
+        return () => {
+            if (layerGroupRef.current) {
+                layerGroupRef.current.remove();
+                layerGroupRef.current = null;
+            }
+        };
+    }, []);
+
+    return null;
+};
+
+
+// --- Main Map Component ---
+
 interface MapComponentProps {
   layers: LayerConfig[];
   onSelectCustomer: (customer: CustomerData, layerId: string) => void;
@@ -48,11 +210,10 @@ interface MapComponentProps {
   selectedCustomerId?: string;
   selectedCustomerIds?: Set<string>;
   filters?: FilterRule[];
-  
-  // Search Area Mode
   isSelectingSearchArea?: boolean;
   onSearchAreaComplete?: (bounds: BoundingBox) => void;
   cursorMode?: 'hand' | 'arrow';
+  onSetCursorMode?: (mode: 'hand' | 'arrow') => void;
 }
 
 const BoundsFitter = ({ data }: { data: CustomerData[] }) => {
@@ -68,7 +229,6 @@ const BoundsFitter = ({ data }: { data: CustomerData[] }) => {
   return null;
 };
 
-// Component to handle Map Interactions (Double Click, Single Click)
 const MapInteractionHandler = ({ 
     selectionMode, 
     onClosePopup 
@@ -89,35 +249,15 @@ const MapInteractionHandler = ({
         },
         dblclick(e) {
             if (selectionMode !== 'none') return;
-            
             L.DomEvent.stopPropagation(e);
-            
             if (!navigator.onLine) {
-                 L.popup()
-                .setLatLng(e.latlng)
-                .setContent('<div class="text-center text-xs p-2 text-slate-200">وضع غير متصل: لا يمكن جلب العنوان</div>')
-                .openOn(map);
+                 L.popup().setLatLng(e.latlng).setContent('<div class="text-center text-xs p-2 text-slate-200">وضع غير متصل</div>').openOn(map);
                 return;
             }
-
             const { lat, lng } = e.latlng;
-            const popup = L.popup()
-                .setLatLng(e.latlng)
-                .setContent('<div class="text-center text-xs p-2 text-slate-200">جاري جلب البيانات...</div>')
-                .openOn(map);
-
+            const popup = L.popup().setLatLng(e.latlng).setContent('<div class="text-center text-xs p-2 text-slate-200">جاري جلب البيانات...</div>').openOn(map);
             fetchAddressForPoint(lat, lng).then(address => {
-                const content = `
-                    <div class="text-right p-1" dir="rtl">
-                        <div class="font-bold text-sm mb-1 text-blue-400">بيانات الموقع</div>
-                        <div class="text-xs mb-2 text-slate-200">${address}</div>
-                        <div class="text-[10px] text-slate-400 font-mono bg-slate-700 p-1 rounded">
-                            ${lat.toFixed(6)}, ${lng.toFixed(6)}
-                        </div>
-                    </div>
-                `;
-                popup.setContent(content);
-                setPopupInfo({ lat, lng, content });
+                popup.setContent(`<div class="text-right p-1" dir="rtl"><div class="font-bold text-sm mb-1 text-blue-400">الموقع</div><div class="text-xs text-slate-200">${address}</div></div>`);
             });
         }
     });
@@ -205,7 +345,8 @@ const MapComponent: React.FC<MapComponentProps> = ({
     filters = [],
     isSelectingSearchArea = false,
     onSearchAreaComplete,
-    cursorMode = 'hand'
+    cursorMode = 'hand',
+    onSetCursorMode
 }) => {
   const [selectionMode, setSelectionMode] = useState<SelectionMode>('none');
   const [selectionShape, setSelectionShape] = useState<any>(null);
@@ -270,11 +411,14 @@ const MapComponent: React.FC<MapComponentProps> = ({
             shape: layer.shapeMap[String(customer[layer.shapeByField])] || layer.defaultShape 
         };
     }
-    // Optimization: Loop mostly for styled filters
     for (const filter of filters) {
         if (filter.style?.enabled) {
              const val = String(customer[filter.field] || '').toLowerCase();
              const filterVal = filter.value.toLowerCase();
+             
+             // Skip empty filters in style check too
+             if (!filterVal) continue;
+
              let match = false;
              if (filter.operator === 'contains') match = val.includes(filterVal);
              else if (filter.operator === 'equals') match = val === filterVal;
@@ -294,6 +438,8 @@ const MapComponent: React.FC<MapComponentProps> = ({
         
         {!isSelectingSearchArea && (
             <div className="absolute top-4 left-4 z-[1000] flex flex-col gap-2 bg-slate-800/90 backdrop-blur rounded-lg shadow-md p-1.5 border border-slate-600">
+                
+                {/* Selection Tools */}
                 <button 
                     onClick={() => setSelectionMode('polygon')}
                     className={`p-2 rounded-md transition-colors ${selectionMode === 'polygon' ? 'bg-blue-600 text-white' : 'hover:bg-slate-700 text-slate-300'}`}
@@ -308,7 +454,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
                 >
                     <CircleIcon size={20} />
                 </button>
-                <div className="w-full h-[1px] bg-slate-600 my-0.5"></div>
                 <button 
                     onClick={clearSelection}
                     className="p-2 rounded-md hover:bg-red-900/50 text-red-400 transition-colors"
@@ -316,6 +461,25 @@ const MapComponent: React.FC<MapComponentProps> = ({
                 >
                     <Eraser size={20} />
                 </button>
+
+                <div className="w-full h-[1px] bg-slate-600 my-0.5"></div>
+
+                {/* Cursor Mode Tools (Moved here) */}
+                <button 
+                    onClick={() => onSetCursorMode && onSetCursorMode('arrow')}
+                    className={`p-2 rounded-md transition-colors ${cursorMode === 'arrow' ? 'bg-blue-600 text-white' : 'hover:bg-slate-700 text-slate-300'}`}
+                    title="مؤشر سهم (للنقر)"
+                >
+                    <MousePointer2 size={20} />
+                </button>
+                 <button 
+                    onClick={() => onSetCursorMode && onSetCursorMode('hand')}
+                    className={`p-2 rounded-md transition-colors ${cursorMode === 'hand' ? 'bg-blue-600 text-white' : 'hover:bg-slate-700 text-slate-300'}`}
+                    title="مؤشر يد (للتحريك)"
+                >
+                    <Hand size={20} />
+                </button>
+
             </div>
         )}
 
@@ -335,13 +499,11 @@ const MapComponent: React.FC<MapComponentProps> = ({
             maxBounds={EGYPT_BOUNDS}
             maxBoundsViscosity={1.0}
             minZoom={5}
-            // PERFORMANCE: This is crucial. It tells Leaflet to try using Canvas for vector layers.
             preferCanvas={true} 
         >
             <TileLayer
                 attribution='&copy; OpenStreetMap'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                errorTileUrl="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+P+/HgAFhAJ/wlseKgAAAABJRU5ErkJggg=="
                 className={!navigator.onLine ? 'opacity-0' : ''}
             />
             
@@ -364,10 +526,21 @@ const MapComponent: React.FC<MapComponentProps> = ({
             {layers.map((layer) => {
                 if (!layer.visible) return null;
                 
-                // PERFORMANCE SWITCH: 
-                // If data > 1000 points, use CircleMarker (Canvas-friendly, super fast).
-                // If data < 1000, use Marker (DOM-based, allows custom shapes).
-                const useHighPerformanceMode = layer.data.length > 1000;
+                // PERFORMANCE SWITCH: Use LeafletCanvasLayer for > 500 points
+                const useHighPerformanceMode = layer.data.length > 500;
+
+                if (useHighPerformanceMode) {
+                    return (
+                        <LeafletCanvasLayer 
+                            key={layer.id}
+                            layer={layer}
+                            onSelect={onSelectCustomer}
+                            selectedCustomerIds={selectedCustomerIds}
+                            selectedCustomerId={selectedCustomerId}
+                            filters={filters}
+                        />
+                    );
+                }
 
                 return layer.data.map((customer) => {
                     const style = getStyle(customer, layer);
@@ -376,14 +549,13 @@ const MapComponent: React.FC<MapComponentProps> = ({
                     const isAnySelected = isSingleSelected || isMultiSelected;
                     const isDimmed = selectedCustomerIds && selectedCustomerIds.size > 0 && !isMultiSelected;
 
-                    // Common Popup Content
                     const PopupContent = (
                          <Popup>
                             <div className="text-right" dir="rtl">
                             <h3 className="font-bold text-sm mb-1 text-blue-400">{layer.name}</h3>
                             <div className="text-xs space-y-1 text-slate-200">
                                 {Object.entries(customer).slice(0, 6).map(([key, val]) => {
-                                    if (key === 'id' || key === 'lat' || key === 'lng' || key === '_layerId' || key === '_customColor') return null;
+                                    if (['id', 'lat', 'lng', '_layerId', '_customColor'].includes(key)) return null;
                                     return (
                                         <div key={key}>
                                             <span className="font-semibold text-slate-400">{key}: </span>
@@ -399,7 +571,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
                         </Popup>
                     );
 
-                    // Click Handler
                     const eventHandlers = {
                         click: (e: any) => {
                             L.DomEvent.stopPropagation(e);
@@ -408,30 +579,6 @@ const MapComponent: React.FC<MapComponentProps> = ({
                             onSelectCustomer(customer, layer.id);
                         },
                     };
-
-                    if (useHighPerformanceMode) {
-                        return (
-                            <CircleMarker
-                                key={customer.id}
-                                center={[customer.lat, customer.lng]}
-                                radius={isAnySelected ? 8 : 4} // Smaller dots for dense data
-                                pathOptions={{
-                                    color: isAnySelected ? '#fff' : style.color,
-                                    fillColor: style.color,
-                                    fillOpacity: isDimmed ? 0.2 : 0.8,
-                                    weight: isAnySelected ? 2 : 1
-                                }}
-                                eventHandlers={eventHandlers}
-                            >
-                                {layer.labelByField && customer[layer.labelByField] && isAnySelected && (
-                                     <Tooltip direction="top" offset={[0, -10]} opacity={0.9} permanent>
-                                        <span className="font-bold text-xs">{String(customer[layer.labelByField])}</span>
-                                    </Tooltip>
-                                )}
-                                {PopupContent}
-                            </CircleMarker>
-                        );
-                    }
 
                     return (
                         <Marker
