@@ -1,3 +1,5 @@
+import { LatLngBoundsExpression } from 'leaflet';
+
 export const CATEGORY_COLORS = [
   '#ef4444', // red-500
   '#3b82f6', // blue-500
@@ -19,3 +21,9 @@ export const LNG_KEYS = ['lng', 'long', 'longitude', 'خط الطول', 'x', 'خ
 // Fallback Google Maps position (Cairo)
 export const DEFAULT_CENTER = { lat: 30.0444, lng: 31.2357 };
 export const DEFAULT_ZOOM = 6;
+
+// Approximate bounds for Egypt to constrain the map view (South West, North East)
+export const EGYPT_BOUNDS: LatLngBoundsExpression = [
+  [21.0, 24.0], 
+  [32.5, 38.0]
+];
