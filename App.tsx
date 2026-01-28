@@ -147,6 +147,23 @@ const App: React.FC = () => {
     }
   };
 
+  const handleDuplicateLayer = (layerId: string) => {
+      const layer = layers.find(l => l.id === layerId);
+      if (!layer) return;
+
+      const newLayer: LayerConfig = {
+          ...layer,
+          id: `layer-${Date.now()}`,
+          name: `${layer.name} (نسخة)`,
+          // Deep copy data is not strictly needed for immutability unless we edit IDs, 
+          // but good to keep separation if user edits one layer's data.
+          // For 100k rows, shallow copy of array is faster.
+          data: [...layer.data], 
+          visible: true,
+      };
+      setLayers(prev => [...prev, newLayer]);
+  };
+
   const updateLayerConfig = (id: string, updates: Partial<LayerConfig>) => {
       setLayers(prev => prev.map(l => {
           if (l.id !== id) return l;
@@ -274,7 +291,8 @@ const App: React.FC = () => {
           if (k % 5 === 0 || k === maxProcess - 1) {
               setLayers(prev => prev.map(l => l.id === layerId ? { ...l, data: [...newData] } : l));
           }
-          await new Promise(r => setTimeout(r, 1100)); 
+          // Decreased delay slightly as caching handles repeats, but still respectful of OSM
+          await new Promise(r => setTimeout(r, 1000)); 
       }
       
       setEnrichingLayerId(null);
@@ -350,6 +368,7 @@ const App: React.FC = () => {
                                 layer={layer}
                                 onToggleVisibility={(id) => setLayers(prev => prev.map(l => l.id === id ? { ...l, visible: !l.visible } : l))}
                                 onDelete={(id) => setLayers(prev => prev.filter(l => l.id !== id))}
+                                onDuplicate={handleDuplicateLayer}
                                 onUpdateConfig={updateLayerConfig}
                                 onUpdateStyleMap={updateStyleMap}
                                 onFocusValue={handleQuickFilter}
